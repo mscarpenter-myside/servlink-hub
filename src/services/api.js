@@ -1,35 +1,60 @@
-// src/services/api.js
+import { createClient } from '@supabase/supabase-js'
 
-// Futura Configuração Supabase
-// const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL;
-// const SUPABASE_KEY = process.env.REACT_APP_SUPABASE_KEY;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+// Inicializa condicionalmente para não quebrar a UI caso as chaves ainda não estejam no .env
+export const supabase = (supabaseUrl && supabaseAnonKey) 
+  ? createClient(supabaseUrl, supabaseAnonKey) 
+  : null
 
 export const fetchHubData = async () => {
-  // Simulando latência de rede (ex: 800ms)
-  await new Promise(resolve => setTimeout(resolve, 800));
+  if (!supabase) return null;
+  // Neste MVP híbrido, puxaremos o JSONB do BMC/Proposta e as configs
+  const { data, error } = await supabase
+    .from('hub_content')
+    .select('section_key, content')
   
-  // Utilizando o LocalStorage atual apenas como Mock do "Banco de Dados"
-  const saved = localStorage.getItem("servlink_db_mock");
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch (e) {
-      console.error("Falha ao parsear o DB Mock", e);
-    }
+  if (error) {
+    console.error("Supabase Error FETCH:", error)
+    return null;
+  }
+  
+  // Reconstrói o formato global baseado nos blocks Key-Value da tabela híbrida
+  if (data && data.length > 0) {
+    const formattedData = {};
+    data.forEach(row => {
+      formattedData[row.section_key] = row.content;
+    });
+    return formattedData;
   }
   return null;
 };
 
 export const updateHubData = async (payload) => {
-  // Simulando latência de gravação de payload
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
+  if (!supabase) {
+    console.warn("Supabase não inicializado. Verifique .env")
+    return { success: false }
+  }
+
+  // Fazemos um Upsert das fatias (Home, bmc, proposta, branding, etc)
   try {
-    // Escrita Mock no "Banco de Dados"
-    localStorage.setItem("servlink_db_mock", JSON.stringify(payload));
+    const upserts = Object.keys(payload).map(key => ({
+      section_key: key,
+      content: payload[key],
+      last_updated_by: 'ServLink Editor',
+      updated_at: new Date()
+    }));
+
+    const { error } = await supabase
+      .from('hub_content')
+      .upsert(upserts, { onConflict: 'section_key' })
+
+    if (error) throw error;
+    
     return { success: true };
   } catch (error) {
-    console.error("Falha ao enviar pro Backend", error);
+    console.error("Falha ao gravar no Supabase", error);
     return { success: false, error };
   }
 };

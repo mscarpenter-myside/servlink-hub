@@ -17,9 +17,9 @@ export const SyncIndicator = () => {
   return (
     <div style={{ 
       display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', 
-      background: 'rgba(255,255,255,0.06)', borderRadius: 24, 
-      border: '1px solid rgba(255,255,255,0.08)', backdropFilter: 'blur(10px)',
-      boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+      background: 'rgba(0,0,0,0.03)', borderRadius: 24, 
+      border: '1px solid rgba(0,0,0,0.06)', backdropFilter: 'blur(10px)',
+      boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
     }}>
       <div style={{ position: 'relative', width: 8, height: 8 }}>
         <AnimatePresence mode="wait">
@@ -39,7 +39,7 @@ export const SyncIndicator = () => {
           />
         )}
       </div>
-      <span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(255,255,255,0.7)', letterSpacing: '-0.01em', fontFamily: 'var(--font-ui, "Inter", sans-serif)' }}>
+      <span style={{ fontSize: 13, fontWeight: 500, color: 'rgba(0,0,0,0.6)', letterSpacing: '-0.01em', fontFamily: 'var(--font-ui, "Inter", sans-serif)' }}>
         {current.text}
       </span>
     </div>
