@@ -199,6 +199,14 @@ export default function ServLinkBackOffice() {
   const [uploadStatus, setUploadStatus] = useState(null); // null | "uploading" | "done" | string (error)
   const [libraryOpen, setLibraryOpen] = useState(true);
 
+  // Blog Engine — Google Docs integration + in-app editor
+  const [blogDocStatus, setBlogDocStatus] = useState({}); // postId → "creating"|"done"|"error"
+  const [copiedPostId, setCopiedPostId] = useState(null); // postId of last copied post
+  const [blogEditorIdx, setBlogEditorIdx] = useState(null); // postIdx being edited | null
+  const [editorTitle, setEditorTitle] = useState("");
+  const [editorSaveStatus, setEditorSaveStatus] = useState(null); // null|"saving"|"saved"
+  const editorContentRef = useRef(null);
+
   const handleSaveNote = () => {
     setNoteStatus("note_status_saving");
     setTimeout(() => setNoteStatus("note_status_saved"), 500);
@@ -330,6 +338,7 @@ export default function ServLinkBackOffice() {
         "https://www.googleapis.com/auth/calendar.readonly",
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/documents",
       ].join(" "),
       callback: async (response) => {
         if (response.error) { setCalError("Login cancelado: " + response.error); return; }
@@ -508,6 +517,17 @@ export default function ServLinkBackOffice() {
   };
 
   // ─── Google Calendar ──────────────────────────────────────────────────────
+  // Initialize editor when a post is opened for editing
+  useEffect(() => {
+    if (blogEditorIdx === null) return;
+    const post = data.blog.posts[blogEditorIdx];
+    if (!post) return;
+    setEditorTitle(post.title || "");
+    if (editorContentRef.current) {
+      editorContentRef.current.innerHTML = post.content || post.desc || "";
+    }
+  }, [blogEditorIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
     if (!clientId || !clientId.includes(".apps.googleusercontent.com")) return;
@@ -1541,25 +1561,325 @@ export default function ServLinkBackOffice() {
     </motion.div>
   );
 
+  // ─── Blog: Google Docs ────────────────────────────────────────────────────
+  // Returns docId on success, null on failure
+  const createDocForPost = async (post, postIdx, plainText) => {
+    const tok = calTokenRef.current;
+    if (!tok) return null;
+    const postId = post.id || String(postIdx);
+    setBlogDocStatus(prev => ({ ...prev, [postId]: "creating" }));
+    try {
+      // 1. Create blank Google Doc via Drive API
+      const createResp = await fetch("https://www.googleapis.com/drive/v3/files", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: post.title || "Blog Draft", mimeType: "application/vnd.google-apps.document" }),
+      });
+      const { id: docId, error: createErr } = await createResp.json();
+      if (createErr || !docId) throw new Error(createErr?.message || "Falha ao criar documento");
+
+      // 2. Insert content via Docs API batchUpdate (plain text)
+      const body = plainText || [post.tag ? `[${post.tag}]  ${post.date || ""}\n\n` : "", `${post.title || ""}\n\n`, post.desc || ""].join("");
+      if (body.trim()) {
+        await fetch(`https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ requests: [{ insertText: { location: { index: 1 }, text: body } }] }),
+        });
+      }
+
+      // 3. Persist docId
+      updateData(`blog.posts.${postIdx}.docId`, docId);
+      setBlogDocStatus(prev => ({ ...prev, [postId]: "done" }));
+      setTimeout(() => setBlogDocStatus(prev => { const n = { ...prev }; delete n[postId]; return n; }), 3000);
+      return docId;
+    } catch (err) {
+      console.error("Docs create:", err.message);
+      setBlogDocStatus(prev => ({ ...prev, [postId]: "error" }));
+      setTimeout(() => setBlogDocStatus(prev => { const n = { ...prev }; delete n[postId]; return n; }), 4000);
+      return null;
+    }
+  };
+
+  const copyPostText = (post, postIdx) => {
+    const el = editorContentRef.current;
+    const richText = (blogEditorIdx === postIdx && el) ? (el.textContent || el.innerText || "") : "";
+    const text = richText || [post.title, "", post.desc].filter(Boolean).join("\n");
+    navigator.clipboard.writeText(text).catch(() => {});
+    const postId = post.id || String(postIdx);
+    setCopiedPostId(postId);
+    setTimeout(() => setCopiedPostId(null), 2000);
+  };
+
+  const saveEditorContent = (postIdx) => {
+    const html = editorContentRef.current?.innerHTML || "";
+    updateData(`blog.posts.${postIdx}.content`, html);
+    updateData(`blog.posts.${postIdx}.title`, editorTitle);
+    setEditorSaveStatus("saving");
+    setTimeout(() => setEditorSaveStatus("saved"), 300);
+    setTimeout(() => setEditorSaveStatus(null), 2500);
+  };
+
+  const pushToDocsAndOpen = async (post, postIdx) => {
+    // Extract plain text from editor
+    const el = editorContentRef.current;
+    const plainText = el ? (el.textContent || el.innerText || "") : (post.desc || "");
+    const fullText = `${editorTitle || post.title || ""}\n\n${plainText}`;
+    let docId = post.docId;
+    if (!docId) {
+      docId = await createDocForPost({ ...post, title: editorTitle || post.title }, postIdx, fullText);
+    }
+    if (docId) {
+      window.open(`https://docs.google.com/document/d/${docId}/edit`, "_blank");
+    }
+  };
+
+  const renderBlogEditor = (post, postIdx) => {
+    const postId = post.id || String(postIdx);
+    const docStatus = blogDocStatus[postId];
+    const hasDoc = !!post.docId;
+    const isCopied = copiedPostId === postId;
+
+    const execCmd = (cmd, val = null) => {
+      document.execCommand(cmd, false, val);
+      editorContentRef.current?.focus();
+    };
+
+    const ToolBtn = ({ cmd, val, title, children }) => (
+      <button
+        onMouseDown={e => { e.preventDefault(); execCmd(cmd, val); }}
+        title={title}
+        style={{ background: "transparent", border: "none", cursor: "pointer", width: 28, height: 28, borderRadius: 5, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: COLORS.textMuted, transition: "0.15s" }}
+        onMouseEnter={e => { e.currentTarget.style.background = COLORS.bgAlt; e.currentTarget.style.color = COLORS.text; }}
+        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = COLORS.textMuted; }}
+      >{children}</button>
+    );
+
+    return (
+      <AnimatePresence>
+        {blogEditorIdx === postIdx && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)", display: "flex", flexDirection: "column", alignItems: "center", overflow: "hidden" }}
+          >
+            {/* ── Editor chrome bar ── */}
+            <div style={{ width: "100%", background: COLORS.surfaceSolid, borderBottom: `1px solid ${COLORS.border}`, display: "flex", alignItems: "center", padding: "0 24px", height: 48, flexShrink: 0, gap: 12 }}>
+              {/* Close */}
+              <button onClick={() => { saveEditorContent(postIdx); setBlogEditorIdx(null); }}
+                style={{ background: "transparent", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: COLORS.textMuted, fontSize: 13, fontWeight: 500, padding: "4px 8px", borderRadius: 6 }}
+                onMouseEnter={e => e.currentTarget.style.color = COLORS.text}
+                onMouseLeave={e => e.currentTarget.style.color = COLORS.textMuted}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+                Blog Engine
+              </button>
+
+              <div style={{ width: 1, height: 20, background: COLORS.border }} />
+
+              {/* Formatting toolbar */}
+              <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                <ToolBtn cmd="bold" title="Negrito (Ctrl+B)"><b>B</b></ToolBtn>
+                <ToolBtn cmd="italic" title="Itálico (Ctrl+I)"><i>I</i></ToolBtn>
+                <ToolBtn cmd="underline" title="Sublinhado (Ctrl+U)"><u style={{ fontSize: 12 }}>U</u></ToolBtn>
+                <div style={{ width: 1, height: 16, background: COLORS.border, margin: "0 4px" }} />
+                <ToolBtn cmd="formatBlock" val="h1" title="Título 1"><span style={{ fontSize: 11 }}>H1</span></ToolBtn>
+                <ToolBtn cmd="formatBlock" val="h2" title="Título 2"><span style={{ fontSize: 11 }}>H2</span></ToolBtn>
+                <ToolBtn cmd="formatBlock" val="p" title="Parágrafo"><span style={{ fontSize: 11 }}>¶</span></ToolBtn>
+                <div style={{ width: 1, height: 16, background: COLORS.border, margin: "0 4px" }} />
+                <ToolBtn cmd="insertUnorderedList" title="Lista com marcadores">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/></svg>
+                </ToolBtn>
+                <ToolBtn cmd="insertOrderedList" title="Lista numerada">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><path d="M4 6h1v4" strokeLinecap="round"/><path d="M4 10h2"/><path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1.5"/></svg>
+                </ToolBtn>
+              </div>
+
+              <div style={{ flex: 1 }} />
+
+              {/* Save status */}
+              {editorSaveStatus && (
+                <span style={{ fontSize: 11, color: editorSaveStatus === "saved" ? "#22C55E" : COLORS.textMuted, fontFamily: "var(--font-mono)", transition: "0.2s" }}>
+                  {editorSaveStatus === "saving" ? "Salvando..." : "✓ Salvo"}
+                </span>
+              )}
+
+              {/* Copy text */}
+              <button onClick={() => copyPostText(post, postIdx)} title="Copiar texto"
+                style={{ background: isCopied ? "rgba(34,197,94,0.08)" : "transparent", border: `1px solid ${isCopied ? "rgba(34,197,94,0.3)" : COLORS.border}`, borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, color: isCopied ? "#22C55E" : COLORS.textMuted, transition: "0.2s" }}>
+                {isCopied
+                  ? <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copiado</>
+                  : <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copiar</>
+                }
+              </button>
+
+              {/* Salvar rascunho */}
+              <button onClick={() => saveEditorContent(postIdx)}
+                style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "5px 12px", fontSize: 12, fontWeight: 500, cursor: "pointer", color: COLORS.text, transition: "0.2s" }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = COLORS.textDim}
+                onMouseLeave={e => e.currentTarget.style.borderColor = COLORS.border}
+              >Salvar rascunho</button>
+
+              {/* Abrir no Docs */}
+              <button
+                onClick={() => pushToDocsAndOpen(post, postIdx)}
+                disabled={!googleUser || !!docStatus}
+                style={{ background: COLORS.text, border: "none", borderRadius: 6, padding: "5px 14px", fontSize: 12, fontWeight: 600, cursor: googleUser && !docStatus ? "pointer" : "not-allowed", color: "#fff", display: "flex", alignItems: "center", gap: 6, opacity: !googleUser ? 0.5 : 1, transition: "0.2s", boxShadow: "0 2px 8px rgba(0,0,0,0.12)" }}
+                title={!googleUser ? "Faça login para usar o Google Docs" : hasDoc ? "Abrir documento no Google Docs" : "Criar e abrir no Google Docs"}
+              >
+                {docStatus === "creating"
+                  ? <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Criando…</>
+                  : <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/></svg>
+                    {hasDoc ? "Abrir no Docs" : "Salvar no Docs"} <Icons.ExternalLink /></>
+                }
+              </button>
+            </div>
+
+            {/* ── Document area ── */}
+            <div style={{ flex: 1, width: "100%", overflowY: "auto", padding: "48px 24px", display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <div style={{ width: "100%", maxWidth: 760, background: "#FFFFFF", borderRadius: 4, boxShadow: "0 4px 32px rgba(0,0,0,0.18)", minHeight: "calc(100vh - 200px)", display: "flex", flexDirection: "column" }}>
+                {/* Page inner */}
+                <div style={{ padding: "72px 96px", display: "flex", flexDirection: "column", flex: 1 }}>
+                  {/* Title */}
+                  <input
+                    value={editorTitle}
+                    onChange={e => setEditorTitle(e.target.value)}
+                    placeholder="Título do artigo"
+                    style={{ width: "100%", border: "none", outline: "none", fontSize: 32, fontWeight: 700, letterSpacing: "-0.03em", color: "#111", fontFamily: "var(--font-ui)", marginBottom: 8, background: "transparent", lineHeight: 1.2 }}
+                  />
+                  {/* Tag + date row */}
+                  <div style={{ display: "flex", gap: 12, marginBottom: 40, paddingBottom: 24, borderBottom: "1px solid #E8E8E8" }}>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: COLORS.highlight, background: "rgba(0,102,255,0.07)", padding: "3px 8px", borderRadius: 4 }}>{post.tag || "TAG"}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "#999" }}>{post.date || ""}</span>
+                  </div>
+                  {/* Contenteditable body */}
+                  <div
+                    ref={editorContentRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={() => {}}
+                    style={{
+                      flex: 1, outline: "none", fontSize: 16, lineHeight: 1.8,
+                      color: "#1a1a1a", fontFamily: "var(--font-ui)",
+                      minHeight: 400,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    );
+  };
+
   const renderGrowthBlog = () => (
     <motion.div key="blog" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      {/* Editor overlays — one per post, shown when blogEditorIdx matches */}
+      {data.blog.posts.map((p, i) => renderBlogEditor(p, i))}
+
       <div style={{ marginBottom: 32 }}>
         <EditableText path="blog.title" as="h2" style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.02em", color: COLORS.text, margin: 0, marginBottom: 4 }} />
         <EditableText path="blog.subtitle" as="p" style={{ fontSize: 14, color: COLORS.textMuted, margin: 0 }} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        {data.blog.posts.map((p, i) => (
-          <div key={p.id || i} className="bento-card" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <EditableText path={`blog.posts.${i}.tag`} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: COLORS.highlight }} />
-              <EditableText path={`blog.posts.${i}.date`} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: COLORS.textMuted }} />
+        {data.blog.posts.map((p, i) => {
+          const postId = p.id || String(i);
+          const docStatus = blogDocStatus[postId];
+          const isCopied = copiedPostId === postId;
+          const hasDoc = !!p.docId;
+          return (
+            <div key={p.id || i} className="bento-card" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+              {/* Header row: tag + date + copy button */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <EditableText path={`blog.posts.${i}.tag`} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: COLORS.highlight }} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <EditableText path={`blog.posts.${i}.date`} style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: COLORS.textMuted }} />
+                  {/* Copy button */}
+                  <button
+                    onClick={() => copyPostText(p, i)}
+                    title="Copiar texto"
+                    style={{ background: "transparent", border: "none", cursor: "pointer", padding: 3, color: isCopied ? "#22C55E" : COLORS.textDim, display: "flex", alignItems: "center", transition: "color 0.2s" }}
+                    onMouseEnter={e => { if (!isCopied) e.currentTarget.style.color = COLORS.text; }}
+                    onMouseLeave={e => { if (!isCopied) e.currentTarget.style.color = COLORS.textDim; }}
+                  >
+                    {isCopied
+                      ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    }
+                  </button>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
+                <EditableText path={`blog.posts.${i}.title`} as="h3" style={{ fontSize: 16, fontWeight: 500, color: COLORS.text, margin: 0 }} />
+                <EditableText path={`blog.posts.${i}.desc`} as="p" style={{ fontSize: 13, color: COLORS.textMuted, lineHeight: 1.5, margin: 0 }} />
+              </div>
+
+              {/* Write / Edit button */}
+              <button
+                onClick={() => setBlogEditorIdx(i)}
+                style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 6, background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 500, cursor: "pointer", color: COLORS.textMuted, transition: "0.2s" }}
+                onMouseEnter={e => { e.currentTarget.style.color = COLORS.text; e.currentTarget.style.borderColor = COLORS.textDim; e.currentTarget.style.background = COLORS.surfaceSolid; }}
+                onMouseLeave={e => { e.currentTarget.style.color = COLORS.textMuted; e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.background = COLORS.bg; }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                {p.content ? "Editar" : "Escrever"}
+              </button>
+
+              {/* Docs footer */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 12, borderTop: `1px solid ${COLORS.border}`, marginTop: 4 }}>
+                {/* Docs link badge */}
+                {hasDoc ? (
+                  <a
+                    href={"https://docs.google.com/document/d/" + p.docId + "/edit"}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: COLORS.highlight, textDecoration: "none", fontWeight: 500 }}
+                    onMouseEnter={e => e.currentTarget.style.opacity = "0.75"}
+                    onMouseLeave={e => e.currentTarget.style.opacity = "1"}
+                  >
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    Abrir no Docs <Icons.ExternalLink />
+                  </a>
+                ) : (
+                  <div style={{ fontSize: 11, color: COLORS.textDim, fontFamily: "var(--font-mono)" }}>
+                    {!googleUser ? "Login para salvar" : "Sem documento vinculado"}
+                  </div>
+                )}
+
+                {/* Save / status button */}
+                {googleUser && (
+                  <button
+                    onClick={() => !hasDoc && !docStatus && createDocForPost(p, i)}
+                    disabled={!!docStatus || hasDoc}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 5,
+                      background: hasDoc ? "transparent" : docStatus === "done" ? "rgba(34,197,94,0.08)" : docStatus === "error" ? "rgba(220,0,0,0.06)" : COLORS.bg,
+                      border: `1px solid ${hasDoc ? "transparent" : docStatus === "done" ? "rgba(34,197,94,0.3)" : docStatus === "error" ? "rgba(220,0,0,0.2)" : COLORS.border}`,
+                      borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 500, cursor: hasDoc || docStatus ? "default" : "pointer",
+                      color: hasDoc ? COLORS.textDim : docStatus === "done" ? "#22C55E" : docStatus === "error" ? COLORS.red : COLORS.textMuted,
+                      transition: "0.2s",
+                    }}
+                    onMouseEnter={e => { if (!hasDoc && !docStatus) { e.currentTarget.style.borderColor = COLORS.textDim; e.currentTarget.style.color = COLORS.text; } }}
+                    onMouseLeave={e => { if (!hasDoc && !docStatus) { e.currentTarget.style.borderColor = COLORS.border; e.currentTarget.style.color = COLORS.textMuted; } }}
+                  >
+                    {docStatus === "creating"
+                      ? <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Criando…</>
+                      : docStatus === "done"
+                      ? <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg> Salvo!</>
+                      : docStatus === "error"
+                      ? "⚠ Erro"
+                      : hasDoc
+                      ? <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg> Vinculado</>
+                      : <><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Salvar no Docs</>
+                    }
+                  </button>
+                )}
+              </div>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <EditableText path={`blog.posts.${i}.title`} as="h3" style={{ fontSize: 16, fontWeight: 500, color: COLORS.text, margin: 0 }} />
-              <EditableText path={`blog.posts.${i}.desc`} as="p" style={{ fontSize: 13, color: COLORS.textMuted, lineHeight: 1.5, margin: 0 }} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </motion.div>
   );
