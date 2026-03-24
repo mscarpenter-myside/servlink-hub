@@ -3,7 +3,7 @@ export const translations = {
     // ── Navegação ────────────────────────────────────────────────────────────
     nav_home:        "Hub Station",
     nav_core:        "The Engine",
-    nav_growth:      "Strategy Lab",
+    nav_growth:      "Marketing & Growth",
     nav_tech:        "Stack Técnica",
     nav_sprints:     "Ops & Sprints",
     nav_bmc:         "Business Model Canvas",
@@ -156,8 +156,8 @@ export const translations = {
     // ── Navigation ──────────────────────────────────────────────────────────
     nav_home:        "Hub Station",
     nav_core:        "The Engine",
-    nav_growth:      "Strategy Lab",
-    nav_tech:        "Technical Stack",
+    nav_growth:      "Marketing & Growth",
+    nav_tech:        "Tech Stack",
     nav_sprints:     "Ops & Sprints",
     nav_bmc:         "Business Model Canvas",
     nav_proposta:    "Value Proposition",

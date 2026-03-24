@@ -12,7 +12,8 @@ const defaultData = {
       { id: "core_proposta", title: "Proposta de Valor", desc: "Onde a dor estrutural de Jurerê encontra a resiliência escalável do nosso app." },
       { id: "core_diferencial", title: "Diferencial Competitivo", desc: "O que nos torna uma proposta absurdamente única perante o cenário catarinense." },
       { id: "sprints_board", title: "SCRUM Board", desc: "Gestão executiva linear e coordenação ágil das nossas Sprints de engenharia." },
-      { id: "growth_partners", title: "Marketing & Parcerias", desc: "Nossa estratégia B2B de invasão descentralizada e integração com sindicatos." }
+      { id: "growth_partners", title: "Marketing & Parcerias", desc: "Nossa estratégia B2B de invasão descentralizada e integração com sindicatos." },
+      { id: "tech_archi", title: "Stack Técnica", desc: "Arquitetura base do projeto: frontend, backend, cloud e integrações." }
     ],
     milestone: { title: "Próxima Milestone", event: "Status Report ADS", time: "Segunda-feira 20h00" }
   },

@@ -2567,11 +2567,12 @@ export default function ServLinkBackOffice() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           {data.home.cards.map((card, idx) => {
             const navMap = {
-              core_proposta: { main: "core", sub: "proposta", icon: Icons.Play },
-              core_bmc: { main: "core", sub: "bmc", icon: Icons.System },
-              sprints_board: { main: "sprints", sub: "board", icon: Icons.Sprints },
-              growth_partners: { main: "growth", sub: "partners", icon: Icons.Growth },
-              core_diferencial: { main: "core", sub: "diferencial", icon: Icons.Book }
+              core_proposta:   { main: "core",    sub: "proposta",  icon: Icons.Play },
+              core_bmc:        { main: "core",    sub: "bmc",       icon: Icons.System },
+              sprints_board:   { main: "sprints", sub: "board",     icon: Icons.Sprints },
+              growth_partners: { main: "growth",  sub: "partners",  icon: Icons.Growth },
+              core_diferencial:{ main: "core",    sub: "diferencial",icon: Icons.Book },
+              tech_archi:      { main: "tech",    sub: null,        icon: Icons.Tech },
             };
             const nav = navMap[card.id] || { main: "home", sub: null, icon: Icons.System };
             const Icon = nav.icon;
@@ -2740,7 +2741,7 @@ export default function ServLinkBackOffice() {
               <NavTab id="home" label={t("nav_home")} icon={Icons.Home} active={activeMain === "home"} set={(id) => { setActiveMain(id); setActiveSub(null); }} />
               <NavTab id="core" label={t("nav_core")} icon={Icons.System} active={activeMain === "core"} set={(id) => { setActiveMain(id); setActiveSub("bmc"); }} />
               <NavTab id="growth" label={t("nav_growth")} icon={Icons.Growth} active={activeMain === "growth"} set={(id) => { setActiveMain(id); setActiveSub("branding"); }} />
-              <NavTab id="tech" label={t("nav_tech")} icon={Icons.Tech} active={activeMain === "tech"} set={(id) => { setActiveMain(id); setActiveSub("archi"); }} />
+
               <div style={{ width: 1, height: 16, background: COLORS.border, margin: "0 8px" }} />
               <NavTab id="sprints" label={t("nav_sprints")} icon={Icons.Sprints} active={activeMain === "sprints"} set={(id) => { setActiveMain(id); setActiveSub("board"); }} />
             </div>
@@ -2752,8 +2753,8 @@ export default function ServLinkBackOffice() {
               style={{ background: "transparent", border: `1px solid ${COLORS.border}`, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 600, fontFamily: "var(--font-mono)", color: COLORS.textMuted, cursor: "pointer", letterSpacing: "0.04em", transition: "0.2s" }}
               onMouseEnter={e => { e.currentTarget.style.color = COLORS.text; e.currentTarget.style.borderColor = COLORS.textDim; }}
               onMouseLeave={e => { e.currentTarget.style.color = COLORS.textMuted; e.currentTarget.style.borderColor = COLORS.border; }}
-              title={lang === "pt" ? "Switch to English" : "Mudar para Português"}
-            >{lang === "pt" ? "EN" : "PT"}</button>
+              title={lang === "pt" ? "Mudar para English" : "Switch to Português"}
+            >{lang.toUpperCase()}</button>
             <div style={{ fontSize: 11, color: COLORS.textMuted, fontFamily: "var(--font-mono)", letterSpacing: "0.05em" }}>PMI 2026.1</div>
             {googleUser ? (
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${COLORS.border}`, background: COLORS.surface }}>
